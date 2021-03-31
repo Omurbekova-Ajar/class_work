@@ -9,6 +9,21 @@ from django.views.generic.base import TemplateResponseMixin, View
 from django.apps import apps
 from .models import Module, Content
 from django.forms.models import modelform_factory
+from braces.views import CsrfExemptMixin, JsonRequestResponseMixin
+
+class ModuleOrderView(CsrfExemptMixin, JsonRequestResponseMixin, View):
+    def post(self, request):
+        for id, order in self.request_json.items():
+            Module.objects.filter(id=id,
+                course__owner=request.user).update(order=order)
+        return self.render_json_response({'saved': 'OK'})
+
+class ContentOrderView(CsrfExemptMixin, JsonRequestResponseMixin, View):
+    def post(self, request):
+        for id, order in self.request_json.items():
+            Content.objects.filter(id=id,
+                module__course__owner=request.user).update(order=order)
+        return self.render_json_response({'saved': 'OK'})
 
 class OwnerMixin(object):
     def get_queryset(self):
@@ -101,5 +116,44 @@ class ContentCreateUpdateView(TemplateResponseMixin, View):
             self.obj = get_object_or_404(self.model,
                                             id=id,
                                             owner=request.user)
-        return super(ContentCreateUpdateView,
-                 self).dispatch(request, module_id, model_name, id)
+        return super(ContentCreateUpdateView, self).dispatch(request, module_id, model_name, id)
+
+
+    def get(self, request, module_id, modul_name, id=None):
+        form = self.get_form(self.model, instance=self.obj)
+        return self.render_to_response({'form': form, 'object': self.obj})
+
+    def post(self, request, module_id, model_name, id=None):
+        form = self.get_form(self.model, instance=self.obj, data=request.POST, files=request.FILES)
+
+        if form.is_valid():
+            obj = form.save(commit=False)
+            obj.owner = request.user
+            obj.save()
+            if not id:
+                # Создаем новый обьект.
+                Content.objects.create(module=self.module, item=obj)
+            return redirect('module_content_list', self.module.id)
+        return self.render_to_response({'from': form, 'object': self.obj})
+
+class ContentDeleteView(View):
+    def post(self, request, id):
+
+        content = get_object_or_404(Content,
+                                        id=id,
+                                        module__course__owner=request.user)
+
+        module = content.module
+        content.item.delete()
+        content.delete()
+        return redirect('module_content_list', module.id)
+
+class ModuleContentListView(TemplateResponseMixin, View):
+    template_name = 'courses/manage/module/content_list.html'
+
+    def get(self, request, module_id):
+        module = get_object_or_404(Module,
+                                       id=module_id,
+                                       course__owner=request.user)
+
+        return self.render_to_response({'module': module})
